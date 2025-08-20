@@ -1,0 +1,133 @@
+package com.alura.forohub.controller;
+
+import com.alura.forohub.entity.response.Response;
+import com.alura.forohub.entity.response.dto.ActualizarRespuestaDTO;
+import com.alura.forohub.entity.response.dto.CrearRespuestaDTO;
+import com.alura.forohub.entity.response.dto.DetalleRespuestaDTO;
+import com.alura.forohub.entity.response.repository.ResponseRepo;
+import com.alura.forohub.entity.response.validations.update.ValidarRespuestaActualizada;
+import com.alura.forohub.entity.topic.Estado;
+import com.alura.forohub.entity.topic.Topic;
+import com.alura.forohub.entity.topic.repository.TopicRepo;
+import com.alura.forohub.entity.user.User;
+import com.alura.forohub.entity.user.repository.UserRepo;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.UriComponentsBuilder;
+
+import java.util.List;
+
+
+@RestController
+@RequestMapping("/respuesta")
+public class ResponseController {
+
+    @Autowired
+    private TopicRepo topicRepo;
+
+    @Autowired
+    private UserRepo userRepo;
+
+    @Autowired
+    private ResponseRepo responseRepo;
+
+    @Autowired
+    List<ValidarRespuestaActualizada> actualizarValidadores;
+
+
+    @PostMapping
+    @Transactional
+    public ResponseEntity<DetalleRespuestaDTO> crearRespuesta(@RequestBody @Valid CrearRespuestaDTO crearRespuestaDTO,
+                                                              @AuthenticationPrincipal User usuario,
+                                                              UriComponentsBuilder uriBuilder) {
+        Topic topico = topicRepo.findById(crearRespuestaDTO.topicoId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tópico no encontrado"));
+
+        Response respuesta = new Response(crearRespuestaDTO, usuario, topico);
+        responseRepo.save(respuesta);
+
+        var uri = uriBuilder.path("/respuesta/{id}").buildAndExpand(respuesta.getId()).toUri();
+        return ResponseEntity.created(uri).body(new DetalleRespuestaDTO(respuesta));
+    }
+
+
+    @GetMapping("/topico/{topicoId}")
+    public ResponseEntity<Page<DetalleRespuestaDTO>> leerRespuestaTopico(@PageableDefault(size = 5,sort = {"ultimaActualizacion"},
+            direction = Sort.Direction.ASC) Pageable pageable, @PathVariable Long topicoId) {
+        var pagina = responseRepo.findAllByTopicoId(topicoId,pageable).map(DetalleRespuestaDTO::new);
+        return ResponseEntity.ok(pagina);
+    }
+
+    @GetMapping("/usuario/{usuarioId}")
+    public ResponseEntity<Page<DetalleRespuestaDTO>> leerRespuestasUsuario(@PageableDefault(size = 5, sort = {"ultimaActualizacion"},
+            direction = Sort.Direction.ASC)Pageable pageable, @PathVariable Long usuarioId) {
+        var pagina = responseRepo.findAllByUsuarioId(usuarioId, pageable).map(DetalleRespuestaDTO::new);
+        return ResponseEntity.ok(pagina);
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<DetalleRespuestaDTO> leerUnaRespuesta(@PathVariable Long id) {
+        Response respuesta = responseRepo.getReferenceById(id);
+
+        var datosRespuesta = new DetalleRespuestaDTO(
+                respuesta.getId(),
+                respuesta.getMensaje(),
+                respuesta.getFechaCreacion(),
+                respuesta.getUltimaActualizacion(),
+                respuesta.isSolucion(),
+                respuesta.isBorrado(),
+                respuesta.getUsuario().getId(),
+                respuesta.getUsuario().getUsername(),
+                respuesta.getTopico().getId(),
+                respuesta.getTopico().getTitulo()
+        );
+        return ResponseEntity.ok(datosRespuesta);
+    }
+
+    @PutMapping("{id}")
+    @Transactional
+    public ResponseEntity<DetalleRespuestaDTO> actualizarRespuesta(@RequestBody @Valid ActualizarRespuestaDTO actualizarRespuestaDTO, @PathVariable Long id) {
+        actualizarValidadores.forEach(v -> v.validate(actualizarRespuestaDTO, id));
+        Response respuesta = responseRepo.getReferenceById(id);
+        respuesta.actualizarRespuesta(actualizarRespuestaDTO);
+
+        if(actualizarRespuestaDTO.solucion()) {
+            var temaResuelto = topicRepo.getReferenceById(respuesta.getTopico().getId());
+            temaResuelto.setEstado(Estado.CLOSED);
+        }
+
+        var datosRespuesta = new DetalleRespuestaDTO(
+                respuesta.getId(),
+                respuesta.getMensaje(),
+                respuesta.getFechaCreacion(),
+                respuesta.getUltimaActualizacion(),
+                respuesta.isSolucion(),
+                respuesta.isBorrado(),
+                respuesta.getUsuario().getId(),
+                respuesta.getUsuario().getUsername(),
+                respuesta.getTopico().getId(),
+                respuesta.getTopico().getTitulo()
+        );
+        return ResponseEntity.ok(datosRespuesta);
+
+    }
+
+
+    @DeleteMapping("/{id}")
+    @Transactional
+    public ResponseEntity<Void> borrarRespuesta(@PathVariable Long id) {
+        Response respuesta = responseRepo.getReferenceById(id);
+        respuesta.eliminarRespuesta();
+        return ResponseEntity.noContent().build();
+    }
+}
